@@ -19,6 +19,7 @@ from app.api import (
     auth, doctors, appointments, consultations,
     prescriptions, records, feedback, notifications, admin
 )
+from app.chatbot import router as chatbot_router
 from app.websocket.signaling import signaling_manager
 
 logging.basicConfig(level=logging.INFO)
@@ -69,6 +70,7 @@ app.include_router(records.router, prefix=settings.API_V1_STR)
 app.include_router(feedback.router, prefix=settings.API_V1_STR)
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
+app.include_router(chatbot_router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 @app.get(f"{settings.API_V1_STR}/health")

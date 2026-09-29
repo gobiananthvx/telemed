@@ -8,6 +8,7 @@ from app.models.record import MedicalRecord, RecordType
 from app.models.prescription import Prescription, PrescriptionMedicine, MealTiming
 from app.models.notification import Notification, NotificationType
 from app.models.feedback import Feedback
+from app.models.chat import ChatSession, ChatMessage
 
 __all__ = [
     "Base",
@@ -32,4 +33,6 @@ __all__ = [
     "Notification",
     "NotificationType",
     "Feedback",
+    "ChatSession",
+    "ChatMessage",
 ]

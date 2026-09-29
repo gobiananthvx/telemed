@@ -1,6 +1,6 @@
 import os
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Telemed"
@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "*"
     ]
+
+    # LLM & Chatbot Configuration
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY", None)
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini/gemini-1.5-flash")
+    GROQ_API_KEY: Optional[str] = os.getenv("GROQ_API_KEY", None)
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "groq/llama-3.3-70b-versatile")
+    CHATBOT_TIMEZONE: str = os.getenv("CHATBOT_TIMEZONE", "Asia/Kolkata")
 
     class Config:
         env_file = "../.env"

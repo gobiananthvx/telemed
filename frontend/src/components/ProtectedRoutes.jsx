@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { Chatbot } from './chatbot/Chatbot';
 
 export const ProtectedPatientRoute = () => {
   const { isAuthenticated, isDoctor, isAdmin, loading } = useAuth();
@@ -21,7 +22,12 @@ export const ProtectedPatientRoute = () => {
     return <Navigate to="/admin" replace />;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <Chatbot />
+    </>
+  );
 };
 
 export const ProtectedAdminRoute = () => {
