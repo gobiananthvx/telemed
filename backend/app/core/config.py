@@ -27,8 +27,19 @@ class Settings(BaseSettings):
         f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
     )
     
-    # Email microservice (Node.js Nodemailer)
-    EMAIL_SERVICE_URL: str = os.getenv("EMAIL_SERVICE_URL", "http://localhost:5001")
+    # Default Administrator Credentials
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@telemed.com")
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin")
+
+    # Native Python SMTP Email Configuration
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.ethereal.email")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: Optional[str] = os.getenv("SMTP_USER", None)
+    SMTP_PASS: Optional[str] = os.getenv("SMTP_PASS", None)
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "Telemed Health <no-reply@telemed.com>")
+    SMTP_TLS: bool = os.getenv("SMTP_TLS", "true").lower() in ("true", "1", "yes")
+    SMTP_SSL: bool = os.getenv("SMTP_SSL", "false").lower() in ("true", "1", "yes")
     
     # CORS Origins
     CORS_ORIGINS: List[str] = [

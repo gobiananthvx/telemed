@@ -9,8 +9,7 @@ A production-grade, full-stack telemedicine web application built according to t
 | Component | Technology Stack | Internal Port | Host Port | Purpose |
 |---|---|:---:|:---:|---|
 | **Database** | PostgreSQL 16 | 5432 | `5434` | Relational clinical data & audit store |
-| **Email Service** | Node.js Express + Nodemailer | 5001 | `5001` | OTP generation & notification delivery |
-| **Backend API** | FastAPI + SQLAlchemy 2.0 (Async) | 8000 | `8000` | REST endpoints & WebRTC signaling hub |
+| **Backend API** | FastAPI + SQLAlchemy 2.0 (Async) | 8000 | `8000` | REST endpoints, WebRTC signaling hub, and native Python SMTP email delivery |
 | **Frontend UI** | React 19 + Vite + Tailwind CSS | 5173 | `5173` | Patient portal & Admin/Doctor dashboard |
 
 > **Note on Database Port**: Host port `5434` is used (`5434:5432`) to prevent port collision with other local database instances.
@@ -29,7 +28,7 @@ A production-grade, full-stack telemedicine web application built according to t
 
 ### 1. Environment Setup
 
-Ensure the root `.env` file exists with the following configuration:
+Ensure the root `.env` file exists with the following configuration (or copy from `.env.example`):
 
 ```env
 # Database
@@ -45,9 +44,19 @@ JWT_SECRET=telemed_super_secret_jwt_key_clinical_calm_2026
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
-# Microservices
-EMAIL_SERVICE_URL=http://localhost:5001/api/send-email
-EMAIL_PORT=5001
+# Admin Credentials (Auto-verified and created on backend start if missing)
+ADMIN_USERNAME=admin
+ADMIN_EMAIL=admin@telemed.com
+ADMIN_PASSWORD=admin
+
+# Native Python Email Service (SMTP)
+SMTP_HOST=smtp.ethereal.email
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_TLS=true
+EMAIL_FROM=no-reply@telemed.com
+
 CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173","http://localhost:8000","http://127.0.0.1:8000"]
 ```
 
@@ -68,20 +77,7 @@ docker ps --filter "name=telemed-postgres"
 
 ---
 
-### 3. Start Email Service
-
-In a separate terminal window:
-
-```bash
-cd email-service
-npm install
-npm start
-```
-*The service will start on port `5001`. In development mode, test SMTP credentials (Ethereal Email) are provisioned automatically if custom SMTP credentials are not specified.*
-
----
-
-### 4. Setup & Start Backend API
+### 3. Setup & Start Backend API
 
 In a separate terminal window:
 
@@ -95,17 +91,16 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Run initial database seed (creates admin, doctors, patients, and sample appointments)
-PYTHONPATH=. python3 app/seed.py
-
-# Start FastAPI server with Uvicorn
+# Start FastAPI server with Uvicorn (Admin credentials and tables are auto-initialized on startup)
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 *API documentation is available at `http://localhost:8000/docs`.*
+*On startup, the backend automatically initializes database tables and verifies or creates default Administrator credentials (`admin` / `admin`).*
+
 
 ---
 
-### 5. Setup & Start Frontend Application
+### 4. Setup & Start Frontend Application
 
 In a separate terminal window:
 
@@ -126,6 +121,18 @@ npm run dev
 | **Doctor** | `dr.priya@telemed.com` | `doctorpassword123` | `http://localhost:5173/admin` |
 | **Doctor** | `dr.rajesh@telemed.com` | `doctorpassword123` | `http://localhost:5173/admin` |
 | **Patient** | `arjun.kumar@telemed.com` | `patientpassword123` | `http://localhost:5173/signin` |
+
+---
+
+## 🧹 Database Reset Utility
+
+To completely purge all data from all database tables and reset sequence counters:
+
+```bash
+./reset_db.sh
+```
+
+When the FastAPI server starts, only the default Administrator account (`admin` / `admin`) is provisioned. No sample doctors, patients, or appointments are created.
 
 ---
 

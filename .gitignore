@@ -2,3 +2,7 @@ design-reference/
 .env
 PROGRESS.md
 SPEC.md
+venv/
+backend/venv/
+__pycache__/
+*.pyc

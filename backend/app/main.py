@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, get_password_hash
 from app.database import Base, sync_engine, AsyncSessionLocal
 from app.models import *
 from app.models.consultation import Consultation, ConsultationStatus
@@ -25,6 +25,50 @@ from app.websocket.signaling import signaling_manager
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("telemed_app")
 
+async def ensure_admin_user():
+    """
+    Checks if administrator credentials exist in the database on startup.
+    If not, automatically provisions the default administrator account.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = select(User).where(
+                (User.role == UserRole.ADMIN) |
+                (User.username == settings.ADMIN_USERNAME) |
+                (User.email == settings.ADMIN_EMAIL)
+            )
+            res = await session.execute(stmt)
+            admin_user = res.scalars().first()
+
+            if not admin_user:
+                logger.info(f"[Startup] No admin account detected. Provisioning default admin ({settings.ADMIN_USERNAME})...")
+                new_admin = User(
+                    email=settings.ADMIN_EMAIL,
+                    username=settings.ADMIN_USERNAME,
+                    hashed_password=get_password_hash(settings.ADMIN_PASSWORD),
+                    role=UserRole.ADMIN,
+                    is_active=True,
+                    is_verified=True
+                )
+                session.add(new_admin)
+                await session.commit()
+                logger.info(f"[Startup] ✔ Admin account created: username={settings.ADMIN_USERNAME}, email={settings.ADMIN_EMAIL}")
+            else:
+                # Ensure existing matched admin account retains admin role and active status
+                updated = False
+                if admin_user.role != UserRole.ADMIN:
+                    admin_user.role = UserRole.ADMIN
+                    updated = True
+                if not admin_user.is_active or not admin_user.is_verified:
+                    admin_user.is_active = True
+                    admin_user.is_verified = True
+                    updated = True
+                if updated:
+                    await session.commit()
+                logger.info(f"[Startup] ✔ Admin account verified in database: username={admin_user.username}, email={admin_user.email}")
+    except Exception as e:
+        logger.error(f"[Startup] Failed to check/provision admin credentials: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Telemed Database tables...")
@@ -33,6 +77,10 @@ async def lifespan(app: FastAPI):
         logger.info("Database tables verified successfully.")
     except Exception as e:
         logger.error(f"Error creating database tables: {e}")
+
+    # Check and initialize admin credentials
+    await ensure_admin_user()
+
     yield
     logger.info("Telemed API server shutting down.")
 

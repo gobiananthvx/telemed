@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc
 from sqlalchemy.orm import selectinload
+from datetime import date
 
 from app.database import get_async_db
 from app.models.appointment import Appointment, AppointmentStatus, ConsultationMode
