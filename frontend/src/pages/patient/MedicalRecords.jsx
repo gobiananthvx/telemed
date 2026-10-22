@@ -95,11 +95,11 @@ export const MedicalRecords = () => {
               </span>
               <a
                 href={getRecordingUrlWithAuth(playingRecording.recording_url || `/api/consultations/${playingRecording.room_id}/recording`)}
-                download={`consultation_${playingRecording.room_id}.webm`}
+                download={`consultation_${playingRecording.room_id}.mp4`}
                 className="inline-flex items-center gap-1.5 text-teal-400 hover:text-teal-300 font-semibold transition"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Download Video</span>
+                <span>Download Video (.mp4)</span>
               </a>
             </div>
           </div>

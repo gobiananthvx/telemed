@@ -16,7 +16,9 @@ export const ChatbotPopup = ({
   onConfirmBooking,
   onCancelBooking,
   voiceMode,
-  onToggleVoiceMode
+  onToggleVoiceMode,
+  triggerListen,
+  onActivateVoice
 }) => {
   if (!isOpen) return null;
 
@@ -97,6 +99,8 @@ export const ChatbotPopup = ({
         onSendMessage={onSendMessage}
         isLoading={isLoading}
         suggestions={suggestions}
+        triggerListen={triggerListen}
+        onActivateVoice={onActivateVoice}
       />
     </div>
   );

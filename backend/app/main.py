@@ -138,24 +138,19 @@ async def health_check():
         "video_mode": "video-audio"
     }
 
-# WebSocket Signaling Endpoint for Real-time Video + Audio Consultation
-@app.websocket("/ws/consultation/{room_id}")
-async def websocket_consultation_signaling(
+# Helper for WebSocket Signaling
+async def _handle_consultation_signaling(
     websocket: WebSocket,
     room_id: str,
-    peer_id: str = Query(..., description="Unique participant ID"),
-    role: str = Query("PATIENT", description="User role (PATIENT or DOCTOR)"),
-    name: str = Query("User", description="Display name of user"),
-    token: Optional[str] = Query(None, description="JWT Authentication Token")
+    peer_id: Optional[str] = None,
+    query_peer_id: Optional[str] = None,
+    role: str = "PATIENT",
+    name: str = "User",
+    token: Optional[str] = None
 ):
-    """
-    WebSocket endpoint for WebRTC peer signaling in telemedicine consultations.
-    Enforces JWT authentication, role verification, consultation existence,
-    and server-side time-window access control (Section 10).
-    Transport strictly for WebRTC Two-Way Audio + Video (Offer, Answer, ICE, Call-End).
-    """
+    actual_peer_id = peer_id or query_peer_id or f"peer-{uuid.uuid4().hex[:8]}"
     user_id = None
-    user_role = role.upper()
+    user_role = (role or "PATIENT").upper()
 
     # Validate JWT if provided
     if token:
@@ -204,21 +199,22 @@ async def websocket_consultation_signaling(
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                         return
 
-        # Enforce time slot window if consultation is not yet COMPLETED
-        if consultation.appointment and consultation.status != ConsultationStatus.COMPLETED:
-            now_dt = datetime.now()
-            start_dt = datetime.combine(consultation.appointment.date, consultation.appointment.start_time)
-            end_dt = datetime.combine(consultation.appointment.date, consultation.appointment.end_time)
+        # If consultation is already active/started by doctor, permit immediate communication
+        if consultation.status not in [ConsultationStatus.WAITING, ConsultationStatus.IN_PROGRESS]:
+            if consultation.appointment and consultation.status != ConsultationStatus.COMPLETED:
+                now_dt = datetime.now()
+                start_dt = datetime.combine(consultation.appointment.date, consultation.appointment.start_time)
+                end_dt = datetime.combine(consultation.appointment.date, consultation.appointment.end_time)
 
-            if now_dt < start_dt - timedelta(minutes=10) or now_dt > end_dt + timedelta(minutes=15):
-                logger.warning(f"[Signaling] Room {room_id} accessed outside valid time window.")
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
+                if now_dt < start_dt - timedelta(minutes=15) or now_dt > end_dt + timedelta(minutes=30):
+                    logger.warning(f"[Signaling] Room {room_id} accessed outside valid time window.")
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    return
 
     await signaling_manager.connect(
         websocket=websocket,
         room_id=room_id,
-        participant_id=peer_id,
+        participant_id=actual_peer_id,
         role=user_role,
         name=name
     )
@@ -230,25 +226,64 @@ async def websocket_consultation_signaling(
             msg_type = message.get("type")
 
             # Attach sender info
-            message["sender"] = peer_id
+            message["sender"] = actual_peer_id
             message["role"] = user_role
             message["name"] = name
 
-            # Two-way video + audio WebRTC signaling: NO chat-message, NO vitals-shared
-            if msg_type in ["offer", "answer", "ice-candidate", "call-ended"]:
-                await signaling_manager.broadcast_to_peer(room_id, peer_id, message)
+            # Two-way video + audio WebRTC signaling
+            if msg_type in ["offer", "answer", "ice-candidate", "call-ended", "ready-for-negotiation"]:
+                await signaling_manager.broadcast_to_peer(room_id, actual_peer_id, message)
+            elif msg_type == "join":
+                logger.debug(f"[Signaling] Participant joined acknowledgment: {actual_peer_id}")
             else:
                 logger.debug(f"Received non-relay signaling message: {msg_type}")
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "message": f"Signaling message type '{msg_type}' is disabled. In-call chat and non-media features are not permitted."
-                }))
 
     except WebSocketDisconnect:
-        await signaling_manager.disconnect(room_id, peer_id)
+        await signaling_manager.disconnect(room_id, actual_peer_id)
     except Exception as e:
         logger.error(f"Signaling WebSocket error: {e}")
-        await signaling_manager.disconnect(room_id, peer_id)
+        await signaling_manager.disconnect(room_id, actual_peer_id)
+
+
+# WebSocket Signaling Endpoints (Support both path peer_id and query peer_id)
+@app.websocket("/ws/consultation/{room_id}")
+async def websocket_consultation_signaling(
+    websocket: WebSocket,
+    room_id: str,
+    peer_id: Optional[str] = Query(None, description="Unique participant ID"),
+    role: str = Query("PATIENT", description="User role (PATIENT or DOCTOR)"),
+    name: str = Query("User", description="Display name of user"),
+    token: Optional[str] = Query(None, description="JWT Authentication Token")
+):
+    await _handle_consultation_signaling(
+        websocket=websocket,
+        room_id=room_id,
+        peer_id=None,
+        query_peer_id=peer_id,
+        role=role,
+        name=name,
+        token=token
+    )
+
+@app.websocket("/ws/consultation/{room_id}/{peer_id}")
+async def websocket_consultation_signaling_with_peer_id(
+    websocket: WebSocket,
+    room_id: str,
+    peer_id: str,
+    role: str = Query("PATIENT", description="User role (PATIENT or DOCTOR)"),
+    name: str = Query("User", description="Display name of user"),
+    token: Optional[str] = Query(None, description="JWT Authentication Token")
+):
+    await _handle_consultation_signaling(
+        websocket=websocket,
+        room_id=room_id,
+        peer_id=peer_id,
+        query_peer_id=None,
+        role=role,
+        name=name,
+        token=token
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

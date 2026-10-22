@@ -1,8 +1,11 @@
 import random
 import string
 from datetime import datetime, timezone, timedelta
-
 import os
+import shutil
+import subprocess
+import uuid
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +21,7 @@ from app.schemas.consultation import ConsultationResponse, ConsultationEnd
 from app.services.notification_service import create_notification
 from app.api.deps import get_current_verified_user, require_roles
 
-
+logger = logging.getLogger("consultations_api")
 router = APIRouter(prefix="/consultations", tags=["Consultations"])
 
 
@@ -512,21 +515,56 @@ async def upload_consultation_recording(
     recordings_dir = os.path.join(backend_dir, "storage", "recordings")
     os.makedirs(recordings_dir, exist_ok=True)
 
-    file_ext = os.path.splitext(file.filename)[1] or ".webm"
-    safe_filename = f"recording_{consultation.id}_{room_id}{file_ext}"
-    file_path = os.path.join(recordings_dir, safe_filename)
+    final_mp4_path = os.path.join(recordings_dir, f"recording_{consultation.id}_{room_id}.mp4")
+    temp_file_path = os.path.join(recordings_dir, f"temp_{consultation.id}_{room_id}_{uuid.uuid4().hex[:6]}.webm")
 
-    # Read and save file content
+    # Read and save incoming content to temporary file
     contents = await file.read()
-    file_size = len(contents)
-    with open(file_path, "wb") as f:
+    with open(temp_file_path, "wb") as f:
         f.write(contents)
 
+    file_size = len(contents)
+
+    # Transcode to universal MP4 (H.264 + AAC + faststart) using ffmpeg
+    ffmpeg_bin = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
+    if os.path.exists(ffmpeg_bin) and os.path.getsize(temp_file_path) > 0:
+        try:
+            ffmpeg_cmd = [
+                ffmpeg_bin,
+                "-y",
+                "-i", temp_file_path,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                final_mp4_path
+            ]
+            proc = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            if proc.returncode == 0 and os.path.exists(final_mp4_path) and os.path.getsize(final_mp4_path) > 0:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                file_size = os.path.getsize(final_mp4_path)
+                logger.info(f"[Recording] Transcoded consultation {consultation.id} recording to MP4 ({file_size} bytes)")
+            else:
+                logger.warning(f"[Recording] FFmpeg transcode non-zero exit ({proc.returncode}): {proc.stderr.decode('utf-8', errors='ignore')[:200]}")
+                if os.path.exists(temp_file_path):
+                    shutil.move(temp_file_path, final_mp4_path)
+                    file_size = os.path.getsize(final_mp4_path)
+        except Exception as fe:
+            logger.error(f"[Recording] FFmpeg transcode exception: {fe}")
+            if os.path.exists(temp_file_path):
+                shutil.move(temp_file_path, final_mp4_path)
+                file_size = os.path.getsize(final_mp4_path)
+    else:
+        if os.path.exists(temp_file_path):
+            shutil.move(temp_file_path, final_mp4_path)
+            file_size = os.path.getsize(final_mp4_path)
 
     consultation.recording_url = f"/api/consultations/{room_id}/recording"
     consultation.recording_duration_seconds = max(int(duration_seconds), consultation.duration_seconds)
     consultation.recording_size_bytes = file_size
-
     consultation.recorded_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -581,7 +619,7 @@ async def get_consultation_recording(
     ]
     file_path = None
     for s_dir in search_dirs:
-        for ext in [".webm", ".mp4", ".ogg"]:
+        for ext in [".mp4", ".webm", ".ogg"]:
             candidate = os.path.join(s_dir, f"recording_{consultation.id}_{room_id}{ext}")
             if os.path.exists(candidate):
                 file_path = candidate
@@ -589,16 +627,15 @@ async def get_consultation_recording(
         if file_path:
             break
 
-
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(
             status_code=404,
             detail="Recording video file not found on server storage."
         )
 
-    media_type = "video/webm" if file_path.endswith(".webm") else "video/mp4"
+    media_type = "video/mp4" if file_path.endswith(".mp4") else ("video/webm" if file_path.endswith(".webm") else "application/octet-stream")
     return FileResponse(
         path=file_path,
         media_type=media_type,
-        filename=f"telemed_consultation_{room_id}.webm"
+        filename=f"telemed_consultation_{room_id}.mp4"
     )

@@ -430,7 +430,7 @@ export const VideoConsultation = () => {
             formData.append('file', blob, `recording_${roomId}.webm`);
             formData.append('duration_seconds', String(duration));
 
-            const token = localStorage.getItem('token');
+            const token = localStorage.getItem('telemed_token');
             const res = await fetch(`/api/consultations/${roomId}/recording`, {
               method: 'POST',
               headers: {
@@ -440,7 +440,8 @@ export const VideoConsultation = () => {
             });
 
             if (res.ok) {
-              console.log('[Recording] Consultation recording persisted to database');
+              const data = await res.json().catch(() => null);
+              console.log('[Recording] Consultation recording persisted to database:', data);
             } else {
               console.warn('[Recording] Upload response status:', res.status);
             }
@@ -547,8 +548,37 @@ export const VideoConsultation = () => {
           }
         };
 
+        pc.onconnectionstatechange = () => {
+          console.log('[WebRTC] Connection state:', pc.connectionState);
+          if (pc.connectionState === 'connected') {
+            if (isMounted) {
+              setConnectionStatus('ACTIVE');
+              setStatusMessage('Live Video & Audio Connected');
+            }
+          } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            if (isMounted) {
+              setConnectionStatus('RECONNECTING');
+              setStatusMessage('Reconnecting video & audio stream...');
+            }
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('[WebRTC] ICE state:', pc.iceConnectionState);
+          if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+            if (isMounted) {
+              setConnectionStatus('ACTIVE');
+              setStatusMessage('Live Video & Audio Connected');
+            }
+          }
+        };
+
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/consultation/${roomId}/${peerId}`;
+        const token = localStorage.getItem('telemed_token') || '';
+        const userRole = user?.role || (isDoctor ? 'DOCTOR' : 'PATIENT');
+        const userName = encodeURIComponent(user?.name || userRole);
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+        const wsUrl = `${protocol}//${window.location.host}/ws/consultation/${roomId}/${peerId}?role=${userRole}&name=${userName}${tokenParam}`;
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
@@ -591,6 +621,24 @@ export const VideoConsultation = () => {
             const msg = JSON.parse(event.data);
 
             switch (msg.type) {
+              case 'room-state':
+                if (msg.total_participants >= 2) {
+                  if (isMounted) {
+                    setStatusMessage('Both parties present. Initializing live two-way media...');
+                    setConnectionStatus('CONNECTING');
+                  }
+                  await sendOfferIfDoctor();
+                }
+                break;
+
+              case 'ready-for-negotiation':
+                if (isMounted) {
+                  setStatusMessage('Both parties connected. Negotiating real-time media...');
+                  setConnectionStatus('CONNECTING');
+                }
+                await sendOfferIfDoctor();
+                break;
+
               case 'room-status':
                 if (msg.peer_count >= 2) {
                   if (isMounted) {
@@ -603,7 +651,7 @@ export const VideoConsultation = () => {
 
               case 'peer-joined':
                 if (isMounted) {
-                  setStatusMessage('Both parties present. Negotiating real-time media...');
+                  setStatusMessage(`${msg.name || 'Participant'} joined. Establishing media connection...`);
                   setConnectionStatus('CONNECTING');
                 }
                 await sendOfferIfDoctor();

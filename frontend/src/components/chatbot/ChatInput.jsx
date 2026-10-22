@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, Mic, MicOff } from 'lucide-react';
 
-export const ChatInput = ({ onSendMessage, isLoading, suggestions = [] }) => {
+export const ChatInput = ({ onSendMessage, isLoading, suggestions = [], triggerListen = 0, onActivateVoice }) => {
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const inputRef = useRef(null);
@@ -45,6 +45,7 @@ export const ChatInput = ({ onSendMessage, isLoading, suggestions = [] }) => {
 
         // When speech recognition produces final transcript, submit immediately
         if (finalTranscript && finalTranscript.trim()) {
+          if (onActivateVoice) onActivateVoice();
           onSendMessage(finalTranscript.trim());
           setInput('');
           recognition.stop();
@@ -73,7 +74,21 @@ export const ChatInput = ({ onSendMessage, isLoading, suggestions = [] }) => {
         } catch (_) {}
       }
     };
-  }, [onSendMessage]);
+  }, [onSendMessage, onActivateVoice]);
+
+  // Auto-reopen microphone when assistant finishes speaking
+  useEffect(() => {
+    if (triggerListen && triggerListen > 0 && recognitionRef.current && !isLoading) {
+      if (!isListening) {
+        setInput('');
+        try {
+          recognitionRef.current.start();
+        } catch (e) {
+          console.warn('Auto start speech error:', e);
+        }
+      }
+    }
+  }, [triggerListen, isLoading]);
 
   useEffect(() => {
     if (!isLoading && !isListening && inputRef.current) {
@@ -91,6 +106,7 @@ export const ChatInput = ({ onSendMessage, isLoading, suggestions = [] }) => {
       recognitionRef.current.stop();
       setIsListening(false);
     } else {
+      if (onActivateVoice) onActivateVoice();
       setInput('');
       try {
         recognitionRef.current.start();

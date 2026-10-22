@@ -27,30 +27,68 @@ export const cleanTextForSpeech = (text) => {
     .trim();
 };
 
-// Web Speech Synthesis Helper
-export const speakAssistantText = (text) => {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+// Web Speech Synthesis Helper with onSpeechEnd callback
+export const speakAssistantText = (text, onSpeechEnd) => {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    if (onSpeechEnd) onSpeechEnd();
+    return;
+  }
   try {
     window.speechSynthesis.cancel(); // Cancel any ongoing speech
+    window.speechSynthesis.resume(); // Unpause speech synthesis engine if suspended
     const clean = cleanTextForSpeech(text);
-    if (!clean) return;
+    if (!clean) {
+      if (onSpeechEnd) onSpeechEnd();
+      return;
+    }
 
     const utterance = new SpeechSynthesisUtterance(clean);
     utterance.lang = 'en-US';
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
 
-    const voices = window.speechSynthesis.getVoices();
-    const enVoice =
-      voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Alex'))) ||
-      voices.find(v => v.lang.startsWith('en'));
-    if (enVoice) {
-      utterance.voice = enVoice;
+    const selectVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      const enVoice =
+        voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Alex'))) ||
+        voices.find(v => v.lang.startsWith('en'));
+      if (enVoice) {
+        utterance.voice = enVoice;
+      }
+    };
+
+    selectVoice();
+    if (window.speechSynthesis.onvoiceschanged !== undefined && !utterance.voice) {
+      window.speechSynthesis.onvoiceschanged = selectVoice;
     }
+
+    let hasEnded = false;
+    const finishSpeech = () => {
+      if (!hasEnded) {
+        hasEnded = true;
+        if (onSpeechEnd) onSpeechEnd();
+      }
+    };
+
+    utterance.onend = finishSpeech;
+    utterance.onerror = (err) => {
+      console.warn('[WebSpeech] Utterance error:', err);
+      finishSpeech();
+    };
+
+    // Safety fallback: if browser onend doesn't trigger, release microphone after word estimate
+    const wordCount = clean.split(/\s+/).length;
+    const approxDurationMs = Math.max((wordCount / 2.5) * 1000 + 1000, 2500);
+    setTimeout(() => {
+      if (!hasEnded && !window.speechSynthesis.speaking) {
+        finishSpeech();
+      }
+    }, approxDurationMs + 3500);
 
     window.speechSynthesis.speak(utterance);
   } catch (err) {
     console.warn('[WebAudio] SpeechSynthesis error:', err);
+    if (onSpeechEnd) onSpeechEnd();
   }
 };
 
@@ -66,7 +104,8 @@ export const Chatbot = () => {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState(() => localStorage.getItem('telemed_chat_session_id'));
-  const [voiceMode, setVoiceMode] = useState(() => localStorage.getItem('telemed_voice_mode') === 'true');
+  const [voiceMode, setVoiceMode] = useState(() => localStorage.getItem('telemed_voice_mode') !== 'false');
+  const [triggerListen, setTriggerListen] = useState(0);
   const [suggestions, setSuggestions] = useState([
     'Find a doctor',
     'Show my appointments',
@@ -92,7 +131,7 @@ export const Chatbot = () => {
     return null;
   }
 
-  // 15-Second Inactivity Detector for Authenticated Patients
+  // 30-Second Inactivity Detector for Authenticated Patients
   useEffect(() => {
     if (!isAuthenticated || !isPatient) return;
 
@@ -112,7 +151,7 @@ export const Chatbot = () => {
           setVoiceMode(true);
           localStorage.setItem('telemed_voice_mode', 'true');
 
-          const greetingContent = "Hello! I noticed you might need assistance. How can I help you today? You can search for doctors, book appointments, or check your prescriptions.";
+          const greetingContent = "Hello! Can I help you with anything today?";
           const greetingMsg = {
             id: Date.now(),
             role: 'assistant',
@@ -123,10 +162,12 @@ export const Chatbot = () => {
           };
           setMessages((prev) => [...prev, greetingMsg]);
 
-          // Low-latency voice greeting
-          speakAssistantText("Hello! I noticed you might need assistance. How can I help you today?");
+          // Speaks in voice and immediately opens microphone when finished speaking
+          speakAssistantText(greetingContent, () => {
+            setTriggerListen(Date.now());
+          });
         }
-      }, 15000); // 15 seconds
+      }, 30000); // 30 seconds inactivity
     };
 
     const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
@@ -202,9 +243,13 @@ export const Chatbot = () => {
 
         setMessages((prev) => [...prev, assistantMsg]);
 
-        // Speak response if voice mode enabled
+        // Speak response if voice mode enabled and auto-reopen mic upon completion
         if (voiceModeRef.current) {
-          speakAssistantText(resp.message);
+          speakAssistantText(resp.message, () => {
+            if (voiceModeRef.current) {
+              setTriggerListen(Date.now());
+            }
+          });
         }
 
         if (resp.suggested_actions && resp.suggested_actions.length > 0) {
@@ -226,7 +271,11 @@ export const Chatbot = () => {
       };
       setMessages((prev) => [...prev, errorMsg]);
       if (voiceModeRef.current) {
-        speakAssistantText("Sorry, I'm having trouble connecting right now. Please try again.");
+        speakAssistantText("Sorry, I'm having trouble connecting right now. Please try again.", () => {
+          if (voiceModeRef.current) {
+            setTriggerListen(Date.now());
+          }
+        });
       }
     } finally {
       setIsLoading(false);
@@ -307,6 +356,14 @@ export const Chatbot = () => {
         onCancelBooking={handleCancelBooking}
         voiceMode={voiceMode}
         onToggleVoiceMode={toggleVoiceMode}
+        triggerListen={triggerListen}
+        onActivateVoice={() => {
+          if (!voiceModeRef.current) {
+            setVoiceMode(true);
+            voiceModeRef.current = true;
+            localStorage.setItem('telemed_voice_mode', 'true');
+          }
+        }}
       />
     </>
   );
