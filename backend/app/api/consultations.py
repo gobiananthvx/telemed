@@ -2,7 +2,9 @@ import random
 import string
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -460,4 +462,143 @@ async def end_consultation(
     return await get_consultation_with_relationships(
         consultation.id,
         db
+    )
+
+
+# ---------------------------------------------------------------------------
+# Consultation Recording Upload & Secure Access (RBAC)
+# ---------------------------------------------------------------------------
+
+@router.post("/{room_id}/recording", response_model=ConsultationResponse)
+async def upload_consultation_recording(
+    room_id: str,
+    file: UploadFile = File(...),
+    duration_seconds: float = Form(0.0),
+    current_user: User = Depends(get_current_verified_user),
+
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Uploads and stores the composite two-way audio + video recording of the consultation.
+    Restricted to the assigned doctor, patient, or admin.
+    """
+    stmt = (
+        select(Consultation)
+        .options(
+            selectinload(Consultation.doctor),
+            selectinload(Consultation.patient),
+            selectinload(Consultation.appointment)
+        )
+        .where(Consultation.room_id == room_id)
+    )
+    res = await db.execute(stmt)
+    consultation = res.scalar_one_or_none()
+
+    if not consultation:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+
+    # Authorize: Only assigned patient, assigned doctor, or admin
+    if current_user.role == UserRole.PATIENT:
+        if not current_user.patient_profile or consultation.patient_id != current_user.patient_profile.id:
+            raise HTTPException(status_code=403, detail="Not authorized to upload recording for this consultation")
+    elif current_user.role == UserRole.DOCTOR:
+        if not current_user.doctor_profile or consultation.doctor_id != current_user.doctor_profile.id:
+            raise HTTPException(status_code=403, detail="Not authorized to upload recording for this consultation")
+    elif current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Prepare private secured storage directory
+    backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    recordings_dir = os.path.join(backend_dir, "storage", "recordings")
+    os.makedirs(recordings_dir, exist_ok=True)
+
+    file_ext = os.path.splitext(file.filename)[1] or ".webm"
+    safe_filename = f"recording_{consultation.id}_{room_id}{file_ext}"
+    file_path = os.path.join(recordings_dir, safe_filename)
+
+    # Read and save file content
+    contents = await file.read()
+    file_size = len(contents)
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+
+    consultation.recording_url = f"/api/consultations/{room_id}/recording"
+    consultation.recording_duration_seconds = max(int(duration_seconds), consultation.duration_seconds)
+    consultation.recording_size_bytes = file_size
+
+    consultation.recorded_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    return await get_consultation_with_relationships(consultation.id, db)
+
+
+@router.get("/{room_id}/recording")
+async def get_consultation_recording(
+    room_id: str,
+    current_user: User = Depends(get_current_verified_user),
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Securely streams/downloads the consultation recording.
+    Enforces strict access control: accessible ONLY to the particular patient,
+    particular doctor, and admin.
+    """
+    stmt = (
+        select(Consultation)
+        .where(Consultation.room_id == room_id)
+    )
+    res = await db.execute(stmt)
+    consultation = res.scalar_one_or_none()
+
+    if not consultation:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+
+    # Strict Access Control Guard
+    if current_user.role == UserRole.PATIENT:
+        if not current_user.patient_profile or consultation.patient_id != current_user.patient_profile.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You can only view recordings of your own consultations."
+            )
+    elif current_user.role == UserRole.DOCTOR:
+        if not current_user.doctor_profile or consultation.doctor_id != current_user.doctor_profile.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You can only view recordings of consultations you conducted."
+            )
+    elif current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Administrative privileges required."
+        )
+
+    backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    search_dirs = [
+        os.path.join(backend_dir, "storage", "recordings"),
+        os.path.join(os.getcwd(), "uploads", "recordings"),
+        os.path.join(backend_dir, "uploads", "recordings")
+    ]
+    file_path = None
+    for s_dir in search_dirs:
+        for ext in [".webm", ".mp4", ".ogg"]:
+            candidate = os.path.join(s_dir, f"recording_{consultation.id}_{room_id}{ext}")
+            if os.path.exists(candidate):
+                file_path = candidate
+                break
+        if file_path:
+            break
+
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Recording video file not found on server storage."
+        )
+
+    media_type = "video/webm" if file_path.endswith(".webm") else "video/mp4"
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=f"telemed_consultation_{room_id}.webm"
     )

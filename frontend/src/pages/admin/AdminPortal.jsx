@@ -4,8 +4,9 @@ import {
   LayoutDashboard, UserCheck, Users, Calendar, Video, FileText,
   Pill, Clock, Settings, LogOut, Plus, Search, Check,
   AlertCircle, ChevronRight, CheckCircle2, Shield, Edit3, Trash2,
-  Upload, X, Eye, Activity
+  Upload, X, Eye, Activity, Play, Download
 } from 'lucide-react';
+
 import { apiClient } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 
@@ -32,8 +33,10 @@ export const AdminPortal = () => {
   const [loginError, setLoginError] = useState(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [startingConsultationId, setStartingConsultationId] = useState(null);
+  const [playingRecording, setPlayingRecording] = useState(null);
 
   // Portal Navigation State
+
   const [activeTab, setActiveTab] = useState('DASHBOARD');
 
   // Admin Data States
@@ -955,7 +958,19 @@ export const AdminPortal = () => {
                                 <span>View Room</span>
                               </Link>
                             )}
+                            {(appt.recording_url || (appt.status === 'COMPLETED' && appt.room_id)) && (
+                              <button
+                                type="button"
+                                onClick={() => setPlayingRecording(appt)}
+                                className="bg-teal-50 hover:bg-teal-100 text-teal-800 px-3 py-1.5 rounded-xl font-bold text-[11px] inline-flex items-center gap-1 border border-teal-200 cursor-pointer shadow-2xs"
+                                title="Watch Consultation Recording"
+                              >
+                                <Play className="w-3 h-3 fill-current text-teal-700" />
+                                <span>Recording</span>
+                              </button>
+                            )}
                           </div>
+
                         </td>
                       </tr>
                     ))
@@ -1579,6 +1594,64 @@ export const AdminPortal = () => {
           </div>
         </div>
       )}
+
+      {/* Video Recording Playback Modal */}
+      {playingRecording && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col">
+            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between text-white bg-slate-950">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center">
+                  <Video className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">
+                    Consultation Recording: {playingRecording.appointment_number || playingRecording.room_id}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Room: <span className="font-mono text-teal-400">{playingRecording.room_id}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlayingRecording(null)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer"
+                aria-label="Close video player"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="aspect-video bg-black flex items-center justify-center relative">
+              <video
+                src={token ? `/api/consultations/${playingRecording.room_id}/recording?token=${token}` : `/api/consultations/${playingRecording.room_id}/recording`}
+                controls
+                autoPlay
+                className="w-full h-full object-contain"
+              >
+                Your browser does not support the video tag.
+              </video>
+            </div>
+
+            <div className="p-4 bg-slate-950 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+              <span className="flex items-center gap-1.5 text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>Encrypted 2-way Google Meet composite recording archive</span>
+              </span>
+              <a
+                href={token ? `/api/consultations/${playingRecording.room_id}/recording?token=${token}` : `/api/consultations/${playingRecording.room_id}/recording`}
+                download={`consultation_${playingRecording.room_id}.webm`}
+                className="inline-flex items-center gap-1.5 text-teal-400 hover:text-teal-300 font-semibold transition"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Video</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

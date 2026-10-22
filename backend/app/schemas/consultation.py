@@ -23,6 +23,10 @@ class ConsultationResponse(BaseModel):
     ended_at: Optional[datetime] = None
     duration_seconds: int
     clinical_notes: Optional[str] = None
+    recording_url: Optional[str] = None
+    recording_duration_seconds: int = 0
+    recording_size_bytes: int = 0
+    recorded_at: Optional[datetime] = None
     created_at: datetime
     doctor: Optional[DoctorProfileResponse] = None
     patient: Optional[PatientProfileResponse] = None

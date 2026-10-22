@@ -74,7 +74,14 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Telemed Database tables...")
     try:
         Base.metadata.create_all(bind=sync_engine)
-        logger.info("Database tables verified successfully.")
+        from sqlalchemy import text
+        with sync_engine.connect() as conn:
+            conn.execute(text("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS recording_url VARCHAR;"))
+            conn.execute(text("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS recording_duration_seconds INTEGER DEFAULT 0;"))
+            conn.execute(text("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS recording_size_bytes INTEGER DEFAULT 0;"))
+            conn.execute(text("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ;"))
+            conn.commit()
+        logger.info("Database tables and columns verified successfully.")
     except Exception as e:
         logger.error(f"Error creating database tables: {e}")
 
@@ -106,6 +113,7 @@ from fastapi.staticfiles import StaticFiles
 
 uploads_dir = os.path.join(os.getcwd(), "uploads")
 os.makedirs(os.path.join(uploads_dir, "doctors"), exist_ok=True)
+os.makedirs(os.path.join(uploads_dir, "recordings"), exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 # Include REST Routers

@@ -31,7 +31,10 @@ class AppointmentResponse(BaseModel):
     payment_status: str
     created_at: datetime
     room_id: Optional[str] = None
+    recording_url: Optional[str] = None
+    recording_duration_seconds: Optional[int] = None
     doctor: Optional[DoctorProfileResponse] = None
+
     patient: Optional[PatientProfileResponse] = None
 
     class Config:

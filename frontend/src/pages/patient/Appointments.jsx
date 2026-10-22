@@ -158,13 +158,24 @@ export const Appointments = () => {
                   </Link>
 
                   {appt.status === 'COMPLETED' ? (
-                    <Link
-                      to={`/feedback/${appt.id}`}
-                      className="bg-amber-50 hover:bg-amber-100 text-amber-800 px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-amber-200"
-                    >
-                      <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-                      <span>Review Visit</span>
-                    </Link>
+                    <div className="flex items-center gap-1.5">
+                      {appt.room_id && (
+                        <Link
+                          to="/records"
+                          className="bg-teal-50 hover:bg-teal-100 text-teal-800 px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-teal-200"
+                        >
+                          <Video className="w-3.5 h-3.5 text-teal-700" />
+                          <span>Recording</span>
+                        </Link>
+                      )}
+                      <Link
+                        to={`/feedback/${appt.id}`}
+                        className="bg-amber-50 hover:bg-amber-100 text-amber-800 px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-amber-200"
+                      >
+                        <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                        <span>Review</span>
+                      </Link>
+                    </div>
                   ) : appt.room_id ? (
                     <Link
                       to={`/consultation/${appt.room_id}`}

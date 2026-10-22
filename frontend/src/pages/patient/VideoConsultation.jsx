@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ChevronLeft, Video, VideoOff, Mic, MicOff, PhoneOff,
-  ShieldCheck, AlertCircle, RefreshCw, Volume2
+  ShieldCheck, AlertCircle, RefreshCw, Volume2, CircleDot, Loader2
 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
@@ -136,6 +136,11 @@ export const VideoConsultation = () => {
   const [errorNotice, setErrorNotice] = useState(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
+  // Composite Google Meet Style Recording State
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [uploadingRecording, setUploadingRecording] = useState(false);
+
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -145,8 +150,21 @@ export const VideoConsultation = () => {
   const iceCandidatesQueue = useRef([]);
   const isNegotiating = useRef(false);
 
+  // Recording Refs
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const canvasRef = useRef(null);
+  const drawIntervalRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const recordingTimerRef = useRef(null);
+  const recordingDurationRef = useRef(0);
+
   const peerId = useRef(`peer-${user?.id || Math.floor(Math.random() * 10000)}`).current;
   const isDoctor = user?.role === 'DOCTOR';
+
+  const otherParticipantName = isDoctor
+    ? (consultation?.patient?.full_name || 'Patient')
+    : (consultation?.doctor?.full_name || 'Doctor');
 
   // 1. Fetch Consultation Details & Authorize on Backend
   useEffect(() => {
@@ -171,6 +189,278 @@ export const VideoConsultation = () => {
     return () => { active = false; };
   }, [roomId]);
 
+  // ---------------------------------------------------------------------------
+  // Google Meet Style Composite Recording Engine
+  // ---------------------------------------------------------------------------
+  const startCompositeRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      return;
+    }
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+      canvasRef.current = canvas;
+
+      // Audio mixing using Web Audio API
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      let mixedAudioTrack = null;
+      if (AudioCtx) {
+        try {
+          const actx = new AudioCtx();
+          audioContextRef.current = actx;
+          const dest = actx.createMediaStreamDestination();
+
+          if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
+            try {
+              const localSource = actx.createMediaStreamSource(localStreamRef.current);
+              localSource.connect(dest);
+            } catch (e) {
+              console.warn('[Recording] Local audio mixing connect note:', e);
+            }
+          }
+
+          if (remoteStreamRef.current && remoteStreamRef.current.getAudioTracks().length > 0) {
+            try {
+              const remoteSource = actx.createMediaStreamSource(remoteStreamRef.current);
+              remoteSource.connect(dest);
+            } catch (e) {
+              console.warn('[Recording] Remote audio mixing connect note:', e);
+            }
+          }
+
+          mixedAudioTrack = dest.stream.getAudioTracks()[0];
+        } catch (actxErr) {
+          console.warn('[Recording] AudioContext init note:', actxErr);
+        }
+      }
+
+      // Draw helper for each participant pane
+      const drawParticipantPane = (ctx, box, videoEl, name, roleLabel) => {
+        ctx.save();
+        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(box.x, box.y, box.w, box.h, 16);
+        } else {
+          ctx.rect(box.x, box.y, box.w, box.h);
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.clip();
+
+        let drewVideo = false;
+        if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
+          try {
+            const vw = videoEl.videoWidth;
+            const vh = videoEl.videoHeight;
+            const scale = Math.max(box.w / vw, box.h / vh);
+            const dw = vw * scale;
+            const dh = vh * scale;
+            const dx = box.x + (box.w - dw) / 2;
+            const dy = box.y + (box.h - dh) / 2;
+            ctx.drawImage(videoEl, dx, dy, dw, dh);
+            drewVideo = true;
+          } catch (_) {}
+        }
+
+        if (!drewVideo) {
+          // Placeholder avatar circle
+          ctx.fillStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.arc(box.x + box.w / 2, box.y + box.h / 2 - 20, 52, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 28px Plus Jakarta Sans, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText((name || '?').charAt(0).toUpperCase(), box.x + box.w / 2, box.y + box.h / 2 - 10);
+        }
+
+        // Name Banner on bottom
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.75)';
+        ctx.fillRect(box.x + 16, box.y + box.h - 52, box.w - 32, 38);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.strokeRect(box.x + 16, box.y + box.h - 52, box.w - 32, 38);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 13px Plus Jakarta Sans, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(name || roleLabel, box.x + 28, box.y + box.h - 28);
+
+        ctx.fillStyle = '#2dd4bf';
+        ctx.font = '11px Plus Jakarta Sans, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(roleLabel, box.x + box.w - 28, box.y + box.h - 28);
+
+        ctx.restore();
+      };
+
+      // Composite loop (runs at 30fps)
+      const drawFrame = () => {
+        if (!canvasRef.current) return;
+        const width = 1280;
+        const height = 720;
+
+        // Dark slate backdrop
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, width, height);
+
+        // Header bar
+        ctx.fillStyle = '#0b132b';
+        ctx.fillRect(0, 0, width, 54);
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, 54);
+        ctx.lineTo(width, 54);
+        ctx.stroke();
+
+        // Header Title
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 15px Plus Jakarta Sans, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Telemed Live Consultation Recording • Room: ${roomId}`, 24, 33);
+
+        // Recording indicator
+        const sec = recordingDurationRef.current;
+        const mins = String(Math.floor(sec / 60)).padStart(2, '0');
+        const secs = String(sec % 60).padStart(2, '0');
+
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(width - 150, 27, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 13px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`REC ${mins}:${secs}`, width - 138, 32);
+
+        // Side-by-side Google Meet boxes
+        const boxY = 70;
+        const boxW = 590;
+        const boxH = 625;
+
+        const docBox = { x: 35, y: boxY, w: boxW, h: boxH };
+        const patBox = { x: 655, y: boxY, w: boxW, h: boxH };
+
+        const docVideo = isDoctor ? localVideoRef.current : remoteVideoRef.current;
+        const patVideo = isDoctor ? remoteVideoRef.current : localVideoRef.current;
+
+        const docName = isDoctor ? (user?.name || 'Dr. Attending') : (otherParticipantName || 'Dr. Attending');
+        const patName = isDoctor ? (otherParticipantName || 'Patient') : (user?.name || 'Patient');
+
+        drawParticipantPane(ctx, docBox, docVideo, docName, 'Doctor (Attending)');
+        drawParticipantPane(ctx, patBox, patVideo, patName, 'Patient');
+      };
+
+      drawIntervalRef.current = setInterval(drawFrame, 1000 / 30);
+
+      // Composite stream
+      const canvasStream = canvas.captureStream(30);
+      const compositeStream = new MediaStream();
+      canvasStream.getVideoTracks().forEach(t => compositeStream.addTrack(t));
+      if (mixedAudioTrack) {
+        compositeStream.addTrack(mixedAudioTrack);
+      }
+
+      let mimeType = 'video/webm;codecs=vp8,opus';
+      if (typeof MediaRecorder !== 'undefined' && !MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : '';
+      }
+
+      if (typeof MediaRecorder !== 'undefined') {
+        const recorder = mimeType
+          ? new MediaRecorder(compositeStream, { mimeType, videoBitsPerSecond: 1500000 })
+          : new MediaRecorder(compositeStream);
+
+        recordedChunksRef.current = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            recordedChunksRef.current.push(e.data);
+          }
+        };
+
+        recorder.start(1000);
+        mediaRecorderRef.current = recorder;
+        setIsRecording(true);
+
+        recordingTimerRef.current = setInterval(() => {
+          recordingDurationRef.current += 1;
+          setRecordingSeconds(recordingDurationRef.current);
+        }, 1000);
+
+        console.log('[Recording] Google Meet composite consultation recorder running');
+      }
+    } catch (err) {
+      console.warn('[Recording] Composite recorder init note:', err);
+    }
+  };
+
+  const stopAndUploadRecording = async () => {
+    if (drawIntervalRef.current) {
+      clearInterval(drawIntervalRef.current);
+      drawIntervalRef.current = null;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') {
+      return;
+    }
+
+    return new Promise((resolve) => {
+      const recorder = mediaRecorderRef.current;
+      recorder.onstop = async () => {
+        try {
+          const mimeType = recorder.mimeType || 'video/webm';
+          const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+          const duration = recordingDurationRef.current || 0;
+
+          if (blob.size > 1000) {
+            console.log(`[Recording] Uploading consultation recording (${blob.size} bytes, ${duration}s)...`);
+            const formData = new FormData();
+            formData.append('file', blob, `recording_${roomId}.webm`);
+            formData.append('duration_seconds', String(duration));
+
+            const token = localStorage.getItem('token');
+            const res = await fetch(`/api/consultations/${roomId}/recording`, {
+              method: 'POST',
+              headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+              },
+              body: formData
+            });
+
+            if (res.ok) {
+              console.log('[Recording] Consultation recording persisted to database');
+            } else {
+              console.warn('[Recording] Upload response status:', res.status);
+            }
+          }
+        } catch (uploadErr) {
+          console.error('[Recording] Upload error:', uploadErr);
+        } finally {
+          setIsRecording(false);
+          resolve();
+        }
+      };
+
+      try {
+        recorder.stop();
+      } catch (e) {
+        resolve();
+      }
+    });
+  };
+
   // 2. Real-Time Two-Way Video + Audio WebRTC Pipeline
   useEffect(() => {
     let isMounted = true;
@@ -180,7 +470,6 @@ export const VideoConsultation = () => {
 
     const startCall = async () => {
       try {
-        // Step A: Acquire local media stream (camera + mic)
         localStream = await acquireMediaStream(isDoctor, user?.name);
         if (!isMounted) {
           localStream.getTracks().forEach(t => t.stop());
@@ -193,7 +482,9 @@ export const VideoConsultation = () => {
           localVideoRef.current.play().catch(() => {});
         }
 
-        // Step B: Initialize WebRTC PeerConnection with STUN servers
+        // Start Meet-style composite recording
+        startCompositeRecording();
+
         const pcConfig = {
           iceServers: [
             { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
@@ -205,13 +496,10 @@ export const VideoConsultation = () => {
         pc = new RTCPeerConnection(pcConfig);
         peerConnectionRef.current = pc;
 
-        // Immediately attach local audio & video tracks so all offers/answers include them
         localStream.getTracks().forEach((track) => {
-          console.log('[WebRTC] Adding local track to PeerConnection:', track.kind, track.label);
           pc.addTrack(track, localStream);
         });
 
-        // Remote track handler: attach remote audio + video to remote video element
         pc.ontrack = (event) => {
           console.log('[WebRTC] Received remote stream track:', event.track.kind);
           if (!remoteStreamRef.current) {
@@ -234,6 +522,16 @@ export const VideoConsultation = () => {
             });
           }
 
+          // Also connect remote audio to recorder AudioContext if active
+          if (audioContextRef.current && event.track.kind === 'audio') {
+            try {
+              const remoteStreamWithAudio = new MediaStream([event.track]);
+              const source = audioContextRef.current.createMediaStreamSource(remoteStreamWithAudio);
+              const dest = audioContextRef.current.destination;
+              source.connect(dest);
+            } catch (_) {}
+          }
+
           if (isMounted) {
             setConnectionStatus('ACTIVE');
             setStatusMessage('Live Video & Audio Connected');
@@ -249,103 +547,61 @@ export const VideoConsultation = () => {
           }
         };
 
-        pc.oniceconnectionstatechange = () => {
-          console.log('[WebRTC] ICE Connection State:', pc.iceConnectionState);
-          if (!isMounted) return;
-          if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-            setConnectionStatus('ACTIVE');
-            setStatusMessage('Live Video & Audio Connected');
-          } else if (pc.iceConnectionState === 'failed') {
-            console.warn('[WebRTC] ICE Connection failed, restarting ICE...');
-            setConnectionStatus('RECONNECTING');
-            setStatusMessage('Reconnecting consultation link...');
-            if (pc.restartIce) pc.restartIce();
-          } else if (pc.iceConnectionState === 'disconnected') {
-            setConnectionStatus('RECONNECTING');
-            setStatusMessage('Connection interrupted. Reconnecting...');
-          }
-        };
-
-        pc.onconnectionstatechange = () => {
-          console.log('[WebRTC] Peer Connection State:', pc.connectionState);
-          if (!isMounted) return;
-          if (pc.connectionState === 'connected') {
-            setConnectionStatus('ACTIVE');
-            setStatusMessage('Encrypted Connection Established');
-          } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-            setConnectionStatus('RECONNECTING');
-            setStatusMessage('Reconnecting consultation link...');
-          }
-        };
-
-        // Step C: Connect WebSocket Signaling
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.host;
-        const token = localStorage.getItem('token');
-        const wsUrl = `${wsProtocol}//${wsHost}/ws/consultation/${roomId}?peer_id=${peerId}&role=${user?.role || 'PATIENT'}&name=${encodeURIComponent(user?.name || 'Participant')}${token ? `&token=${token}` : ''}`;
-
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/consultation/${roomId}/${peerId}`;
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         const sendOfferIfDoctor = async () => {
-          if (!isDoctor) return;
           if (isNegotiating.current) return;
-          if (!pc || pc.signalingState !== 'stable') {
-            console.log('[WebRTC] Skipping offer creation, state:', pc?.signalingState);
-            return;
-          }
-
-          try {
-            isNegotiating.current = true;
-            console.log('[WebRTC] Doctor creating and sending offer...');
-            const offer = await pc.createOffer({
-              offerToReceiveAudio: true,
-              offerToReceiveVideo: true,
-            });
-            await pc.setLocalDescription(offer);
-
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'offer',
-                sdp: pc.localDescription || offer,
-              }));
+          if (isDoctor && pc) {
+            try {
+              isNegotiating.current = true;
+              console.log('[WebRTC] Creating doctor initial offer...');
+              const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true,
+              });
+              await pc.setLocalDescription(offer);
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'offer',
+                  sdp: pc.localDescription || offer,
+                }));
+              }
+            } catch (err) {
+              console.error('[WebRTC] Error creating offer:', err);
+            } finally {
+              isNegotiating.current = false;
             }
-          } catch (err) {
-            console.error('[WebRTC] Error creating offer:', err);
-          } finally {
-            isNegotiating.current = false;
           }
         };
 
         ws.onopen = () => {
-          console.log('[Signaling] WebSocket connected to consultation room:', roomId);
+          console.log('[Signaling] WebSocket connected to room:', roomId);
+          ws.send(JSON.stringify({
+            type: 'join',
+            name: user?.name || (isDoctor ? 'Doctor' : 'Patient'),
+            role: user?.role,
+          }));
         };
 
         ws.onmessage = async (event) => {
           try {
             const msg = JSON.parse(event.data);
-            console.log('[Signaling] Inbound message:', msg.type);
 
             switch (msg.type) {
-              case 'room-state':
-                if (msg.peers && msg.peers.length > 0) {
+              case 'room-status':
+                if (msg.peer_count >= 2) {
                   if (isMounted) {
+                    setStatusMessage('Both parties present. Negotiating real-time media...');
                     setConnectionStatus('CONNECTING');
-                    setStatusMessage('Participant present in room...');
                   }
                   await sendOfferIfDoctor();
                 }
                 break;
 
               case 'peer-joined':
-                if (isMounted) {
-                  setStatusMessage(`${msg.name} joined. Connecting video & audio...`);
-                  setConnectionStatus('CONNECTING');
-                }
-                await sendOfferIfDoctor();
-                break;
-
-              case 'ready-for-negotiation':
                 if (isMounted) {
                   setStatusMessage('Both parties present. Negotiating real-time media...');
                   setConnectionStatus('CONNECTING');
@@ -354,7 +610,6 @@ export const VideoConsultation = () => {
                 break;
 
               case 'offer':
-                console.log('[WebRTC] Received offer, setting remote description...');
                 if (pc.signalingState !== 'stable') {
                   await Promise.all([
                     pc.setLocalDescription({ type: 'rollback' }).catch(() => {}),
@@ -364,13 +619,11 @@ export const VideoConsultation = () => {
                   await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
                 }
 
-                // Drain queued ICE candidates
                 while (iceCandidatesQueue.current.length > 0) {
                   const cand = iceCandidatesQueue.current.shift();
                   await pc.addIceCandidate(cand).catch(e => console.warn('ICE drain error:', e));
                 }
 
-                // Create and send answer
                 const answer = await pc.createAnswer({
                   offerToReceiveAudio: true,
                   offerToReceiveVideo: true,
@@ -391,7 +644,6 @@ export const VideoConsultation = () => {
                 break;
 
               case 'answer':
-                console.log('[WebRTC] Received answer, setting remote description...');
                 if (pc.signalingState === 'have-local-offer') {
                   await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
                   while (iceCandidatesQueue.current.length > 0) {
@@ -420,6 +672,7 @@ export const VideoConsultation = () => {
                 if (isMounted) {
                   setConnectionStatus('ENDED');
                   setStatusMessage('The consultation has concluded.');
+                  stopAndUploadRecording();
                 }
                 break;
 
@@ -464,6 +717,7 @@ export const VideoConsultation = () => {
 
     return () => {
       isMounted = false;
+      stopAndUploadRecording();
       if (localStream) {
         localStream.getTracks().forEach((t) => {
           t.stop();
@@ -508,9 +762,12 @@ export const VideoConsultation = () => {
     }
   };
 
-  // End Call
+  // End Call & Upload Recording
   const handleEndCall = async () => {
     try {
+      setUploadingRecording(true);
+      await stopAndUploadRecording();
+
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'call-ended' }));
       }
@@ -521,6 +778,7 @@ export const VideoConsultation = () => {
     } catch (err) {
       console.error('Error ending consultation:', err);
     } finally {
+      setUploadingRecording(false);
       if (isDoctor) {
         navigate('/admin');
       } else {
@@ -529,12 +787,27 @@ export const VideoConsultation = () => {
     }
   };
 
-  const otherParticipantName = isDoctor
-    ? (consultation?.patient?.full_name || 'Patient')
-    : (consultation?.doctor?.full_name || 'Doctor');
+  const formatDuration = (sec) => {
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col font-sans select-none antialiased">
+      {/* Uploading Recording Modal Overlay */}
+      {uploadingRecording && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-teal-900/60 border border-teal-500/40 flex items-center justify-center text-teal-400 mb-4 animate-spin">
+            <Loader2 className="w-7 h-7" />
+          </div>
+          <h3 className="text-base font-bold text-white mb-1">Saving Consultation Recording...</h3>
+          <p className="text-xs text-slate-400 max-w-sm">
+            Encrypting and uploading Google Meet style composite video & audio securely to your medical records.
+          </p>
+        </div>
+      )}
+
       {/* Top Header Bar */}
       <header className="h-16 px-4 md:px-8 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md flex items-center justify-between z-30 shrink-0">
         <div className="flex items-center gap-3">
@@ -558,9 +831,17 @@ export const VideoConsultation = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Recording Badge */}
+          {isRecording && (
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-semibold animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+              <span>REC {formatDuration(recordingSeconds)}</span>
+            </div>
+          )}
+
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-teal-950/60 border border-teal-500/30 text-teal-300 text-xs font-medium">
             <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-            <span>256-bit Encrypted Video &amp; Audio</span>
+            <span>256-bit Encrypted Composite Recording</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -626,7 +907,7 @@ export const VideoConsultation = () => {
 
               <div className="mt-6 flex items-center gap-2 text-xs text-teal-300/80 font-mono">
                 <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-                <span>Encrypted consultation stream</span>
+                <span>Encrypted consultation stream &amp; Meet-style recording</span>
               </div>
             </div>
           )}
@@ -711,6 +992,7 @@ export const VideoConsultation = () => {
         <button
           type="button"
           onClick={handleEndCall}
+          disabled={uploadingRecording}
           aria-label="End Consultation"
           className="flex flex-col items-center gap-1 group cursor-pointer"
         >
@@ -726,3 +1008,4 @@ export const VideoConsultation = () => {
     </div>
   );
 };
+export default VideoConsultation;

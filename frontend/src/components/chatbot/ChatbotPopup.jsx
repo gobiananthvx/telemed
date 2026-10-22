@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, X, Minus, RotateCcw, Sparkles } from 'lucide-react';
+import { Bot, Minus, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import { ChatWindow } from './ChatWindow';
 import { ChatInput } from './ChatInput';
 
@@ -14,7 +14,9 @@ export const ChatbotPopup = ({
   onSelectDoctor,
   onSelectSlot,
   onConfirmBooking,
-  onCancelBooking
+  onCancelBooking,
+  voiceMode,
+  onToggleVoiceMode
 }) => {
   if (!isOpen) return null;
 
@@ -40,6 +42,21 @@ export const ChatbotPopup = ({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Voice Mode Audio Toggle */}
+          <button
+            type="button"
+            onClick={onToggleVoiceMode}
+            title={voiceMode ? "Voice Response: Active (Click to mute)" : "Voice Response: Muted (Click to enable)"}
+            className={`tap-scale p-1.5 rounded-lg transition ${
+              voiceMode
+                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/30"
+                : "text-teal-200/80 hover:text-white hover:bg-white/10"
+            }`}
+            aria-label="Toggle voice output"
+          >
+            {voiceMode ? <Volume2 className="w-4 h-4 animate-pulse" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+
           {messages.length > 0 && (
             <button
               type="button"
@@ -51,6 +68,7 @@ export const ChatbotPopup = ({
               <RotateCcw className="w-4 h-4" />
             </button>
           )}
+
           <button
             type="button"
             onClick={onClose}

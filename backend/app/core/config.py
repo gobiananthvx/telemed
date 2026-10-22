@@ -1,6 +1,14 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from typing import List, Optional
+
+# Load backend/.env and root .env into os.environ before Settings evaluation
+_backend_dir = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_backend_dir / ".env")
+load_dotenv(_backend_dir.parent / ".env")
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Telemed"

@@ -625,6 +625,94 @@ async def tool_get_prescription_details(
         ]
     }
 
+
+async def tool_cancel_appointment(
+    db: AsyncSession,
+    current_patient: PatientProfile,
+    current_user: User,
+    appointment_id_or_number: str
+) -> Dict[str, Any]:
+    """
+    Cancel an appointment for the authenticated patient.
+    Releases the doctor slot back to available.
+    """
+    stmt = (
+        select(Appointment)
+        .options(
+            selectinload(Appointment.doctor),
+            selectinload(Appointment.slot)
+        )
+        .where(Appointment.patient_id == current_patient.id)
+    )
+    if appointment_id_or_number.isdigit():
+        stmt = stmt.where(Appointment.id == int(appointment_id_or_number))
+    else:
+        norm_num = appointment_id_or_number.strip().upper()
+        if not norm_num.startswith("#"):
+            norm_num = f"#{norm_num}"
+        stmt = stmt.where(Appointment.appointment_number == norm_num)
+
+    res = await db.execute(stmt)
+    appt = res.scalar_one_or_none()
+    if not appt:
+        return {"error": f"Appointment '{appointment_id_or_number}' not found in your records."}
+
+    if appt.status == AppointmentStatus.CANCELLED:
+        return {"error": f"Appointment {appt.appointment_number} is already cancelled."}
+
+    if appt.status == AppointmentStatus.COMPLETED:
+        return {"error": f"Cannot cancel appointment {appt.appointment_number} because it has already been completed."}
+
+    appt.status = AppointmentStatus.CANCELLED
+
+    # Release doctor slot if present
+    if appt.slot_id:
+        slot_stmt = select(DoctorSlot).where(DoctorSlot.id == appt.slot_id)
+        slot_res = await db.execute(slot_stmt)
+        slot = slot_res.scalar_one_or_none()
+        if slot:
+            slot.is_available = True
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "appointment_number": appt.appointment_number,
+        "doctor_name": appt.doctor.full_name if appt.doctor else "Doctor",
+        "date": appt.date.strftime("%A, %d %B %Y"),
+        "time": appt.start_time.strftime("%I:%M %p").lstrip("0"),
+        "status": "CANCELLED",
+        "message": f"Appointment {appt.appointment_number} on {appt.date.strftime('%d %B %Y')} has been successfully cancelled."
+    }
+
+async def tool_get_medical_records(
+    db: AsyncSession,
+    current_patient: PatientProfile
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve clinical medical records and consultation summaries for the patient.
+    """
+    from app.models.record import MedicalRecord
+    stmt = (
+        select(MedicalRecord)
+        .where(MedicalRecord.patient_id == current_patient.id)
+        .order_by(desc(MedicalRecord.created_at))
+    )
+    res = await db.execute(stmt)
+    records = res.scalars().all()
+
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "record_type": r.record_type.value if hasattr(r.record_type, "value") else str(r.record_type),
+            "diagnosis": r.diagnosis,
+            "clinical_notes": r.clinical_notes,
+            "created_at": r.created_at.strftime("%d %B %Y") if r.created_at else None
+        }
+        for r in records
+    ]
+
 # Tool definitions for LiteLLM
 CHATBOT_TOOLS_SPEC = [
     {

@@ -194,7 +194,10 @@ async def book_appointment(
     response_data = AppointmentResponse.model_validate(full_appt)
     if full_appt.consultation:
         response_data.room_id = full_appt.consultation.room_id
+        response_data.recording_url = full_appt.consultation.recording_url
+        response_data.recording_duration_seconds = full_appt.consultation.recording_duration_seconds
     return response_data
+
 
 async def update_missed_appointments(appointments: List[Appointment], db: AsyncSession):
     now_dt = datetime.now()
@@ -248,8 +251,11 @@ async def list_appointments(
         data = AppointmentResponse.model_validate(appt)
         if appt.consultation:
             data.room_id = appt.consultation.room_id
+            data.recording_url = appt.consultation.recording_url
+            data.recording_duration_seconds = appt.consultation.recording_duration_seconds
         result.append(data)
     return result
+
 
 @router.get("/upcoming", response_model=Optional[AppointmentResponse])
 async def get_next_upcoming_appointment(
@@ -289,7 +295,10 @@ async def get_next_upcoming_appointment(
     data = AppointmentResponse.model_validate(appt)
     if appt.consultation:
         data.room_id = appt.consultation.room_id
+        data.recording_url = appt.consultation.recording_url
+        data.recording_duration_seconds = appt.consultation.recording_duration_seconds
     return data
+
 
 @router.get("/{appointment_id}", response_model=AppointmentResponse)
 async def get_appointment(
@@ -323,7 +332,10 @@ async def get_appointment(
     data = AppointmentResponse.model_validate(appt)
     if appt.consultation:
         data.room_id = appt.consultation.room_id
+        data.recording_url = appt.consultation.recording_url
+        data.recording_duration_seconds = appt.consultation.recording_duration_seconds
     return data
+
 
 @router.patch("/{appointment_id}/status", response_model=AppointmentResponse)
 async def update_appointment_status(

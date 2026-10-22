@@ -28,6 +28,10 @@ class Consultation(Base):
     ended_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Integer, default=0, nullable=False)
     clinical_notes = Column(Text, nullable=True)
+    recording_url = Column(String, nullable=True)
+    recording_duration_seconds = Column(Integer, default=0, nullable=False)
+    recording_size_bytes = Column(Integer, default=0, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relationships
